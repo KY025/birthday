@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>Padlet 实时瀑布流洗牌墙</title>
+  <title>Padlet 错落瀑布流洗牌墙</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { 
@@ -24,11 +24,11 @@
     }
     .header h1 { font-size: 28px; font-weight: bold; }
     .header p { font-size: 15px; color: #555; margin-top: 4px; }
-    .status-tag { font-size: 12px; background: rgba(0,0,0,0.1); padding: 4px 10px; border-radius: 12px; color: #666; }
+    .status-tag { font-size: 13px; background: rgba(255,255,255,0.6); backdrop-filter: blur(5px); padding: 6px 14px; border-radius: 20px; color: #333; font-weight: 500; }
 
     /* 原生 Padlet 错落瀑布流 Masonry 排版 */
     #wall-container {
-      column-count: 5; /* 可调整列数：大屏建议 4-5 列 */
+      column-count: 5; /* 大屏建议 4 或 5 列 */
       column-gap: 16px;
       width: 100%;
     }
@@ -47,7 +47,7 @@
 
     .card-item img {
       width: 100%;
-      height: auto;
+      height: auto; /* 图片自然比例伸展，形成大大小小错落感 */
       border-radius: 8px;
       margin-bottom: 10px;
       display: block;
@@ -65,75 +65,57 @@
       <h1>生日祝福墙 | Birthday Blessings Wall</h1>
       <p>感谢您的到来，欢迎留下您的祝福和心意 | Thank you being here.</p>
     </div>
-    <div id="status" class="status-tag">连接 Padlet 中...</div>
+    <div id="status" class="status-tag">数据加载中...</div>
   </div>
 
   <div id="wall-container"></div>
 
   <script>
-    // 你的真实 Padlet RSS 接口
-    const PADLET_RSS = 'https://padlet.com/padlets/s0249qqz2xgdaa5ag50b/podcast.xml';
-    
-    // 使用双重代理解决跨域问题
-    const PROXIES = [
-      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-      url => `https://corsproxy.io/?${encodeURIComponent(url)}`
-    ];
+    // 直接请求 Vercel 自己的 API 路由，100% 不会被跨域拦截
+    const API_ENDPOINT = '/api/feed';
 
-    let liveCardPool = []; // 纯动态卡片池，零预设数据
+    let liveCardPool = [];
     const container = document.getElementById('wall-container');
     const statusEl = document.getElementById('status');
 
-    // 实时读取 Padlet 数据
     async function fetchLivePadletData() {
-      let xmlText = null;
-
-      for (let getProxyUrl of PROXIES) {
-        try {
-          const res = await fetch(getProxyUrl(PADLET_RSS));
-          if (res.ok) {
-            xmlText = await res.text();
-            if (xmlText && xmlText.includes('<rss')) break;
-          }
-        } catch (e) {
-          console.warn("代理尝试中...");
-        }
-      }
-
-      if (!xmlText) {
-        statusEl.innerText = "数据更新等待中...";
-        return;
-      }
-
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(xmlText, "text/xml");
-      const items = xml.querySelectorAll("item");
-
-      const fetchedCards = [];
-      items.forEach(item => {
-        const title = item.querySelector("title")?.textContent?.replace('Padlet', '')?.trim() || "";
-        const desc = item.querySelector("description")?.textContent?.trim() || "";
-        const author = item.querySelector("author")?.textContent?.trim() || "匿名";
+      try {
+        const res = await fetch(API_ENDPOINT);
+        if (!res.ok) throw new Error("API Network error");
         
-        // 提取图片链接
-        let imgUrl = item.querySelector("enclosure")?.getAttribute("url") || "";
-        if (!imgUrl) {
-          const mediaContent = item.getElementsByTagName("media:content")[0];
-          if (mediaContent) imgUrl = mediaContent.getAttribute("url") || "";
-        }
+        const xmlText = await res.text();
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(xmlText, "text/xml");
+        const items = xml.querySelectorAll("item");
 
-        if (title || desc || imgUrl) {
-          fetchedCards.push({ title, desc, author, img: imgUrl });
-        }
-      });
+        const fetchedCards = [];
+        items.forEach(item => {
+          const title = item.querySelector("title")?.textContent?.replace('Padlet', '')?.trim() || "";
+          const desc = item.querySelector("description")?.textContent?.trim() || "";
+          const author = item.querySelector("author")?.textContent?.trim() || "匿名";
+          
+          let imgUrl = item.querySelector("enclosure")?.getAttribute("url") || "";
+          if (!imgUrl) {
+            const mediaContent = item.getElementsByTagName("media:content")[0];
+            if (mediaContent) imgUrl = mediaContent.getAttribute("url") || "";
+          }
 
-      if (fetchedCards.length > 0) {
-        liveCardPool = fetchedCards;
-        statusEl.innerText = `实时同步中 (${liveCardPool.length} 条祝福)`;
+          if (title || desc || imgUrl) {
+            fetchedCards.push({ title, desc, author, img: imgUrl });
+          }
+        });
+
+        if (fetchedCards.length > 0) {
+          liveCardPool = fetchedCards;
+          statusEl.innerText = `实时连线中 (${liveCardPool.length} 条祝福)`;
+          renderWall();
+        }
+      } catch (e) {
+        console.error(e);
+        statusEl.innerText = "数据获取重试中...";
       }
     }
 
-    // 渲染瀑布流墙面
     function renderWall() {
       if (liveCardPool.length === 0) return;
       container.innerHTML = '';
@@ -154,16 +136,13 @@
       });
     }
 
-    // 平滑独立 Shuffle 翻牌
+    // 独立平滑 Shuffle 翻牌
     function startShuffle() {
       setInterval(() => {
         if (liveCardPool.length < 2) return;
 
-        // 随机挑选墙上的一张卡片位置
         const randomIndex = Math.floor(Math.random() * liveCardPool.length);
         const targetCard = document.getElementById(`card-${randomIndex}`);
-
-        // 随机抽选卡片池中的新内容
         const newData = liveCardPool[Math.floor(Math.random() * liveCardPool.length)];
 
         if (targetCard) {
@@ -182,19 +161,15 @@
             targetCard.style.transform = 'scale(1)';
           }, 800);
         }
-      }, 3000); // 每 3 秒洗牌换一张
+      }, 3000); // 每 3 秒随机独立洗牌一张
     }
 
-    // 主程序
     async function init() {
       await fetchLivePadletData();
-      renderWall();
       startShuffle();
 
-      // 每 10 秒定时同步新提交的卡片
-      setInterval(async () => {
-        await fetchLivePadletData();
-      }, 10000);
+      // 每 10 秒自动更新拉取宾客提交的新帖
+      setInterval(fetchLivePadletData, 10000);
     }
 
     init();
