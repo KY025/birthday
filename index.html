@@ -24,11 +24,11 @@
     }
     .header h1 { font-size: 28px; font-weight: bold; }
     .header p { font-size: 15px; color: #555; margin-top: 4px; }
-    .status-tag { font-size: 13px; background: rgba(255,255,255,0.8); backdrop-filter: blur(5px); padding: 6px 14px; border-radius: 20px; color: #333; font-weight: 500; }
+    .status-tag { font-size: 13px; background: rgba(255,255,255,0.85); backdrop-filter: blur(5px); padding: 6px 14px; border-radius: 20px; color: #333; font-weight: 500; }
 
     /* 原生 Padlet 错落瀑布流 Masonry 排版 */
     #wall-container {
-      column-count: 5; /* 大屏建议 4 或 5 列 */
+      column-count: 5;
       column-gap: 16px;
       width: 100%;
     }
@@ -65,75 +65,53 @@
       <h1>生日祝福墙 | Birthday Blessings Wall</h1>
       <p>感谢您的到来，欢迎留下您的祝福和心意 | Thank you being here.</p>
     </div>
-    <div id="status" class="status-tag">数据连接中...</div>
+    <div id="status" class="status-tag">数据读取中...</div>
   </div>
 
   <div id="wall-container"></div>
 
   <script>
-    const PADLET_RSS = 'https://padlet.com/padlets/s0249qqz2xgdaa5ag50b/podcast.xml';
-    
-    // 3 重解封通道，防止被封锁
-    const SOURCES = [
-      // 通道 1: RSS2JSON 服务 (将 XML 转为 JSON，极度稳定)
-      async () => {
-        const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(PADLET_RSS)}`);
-        const data = await res.json();
-        return data.items.map(item => ({
-          title: item.title?.replace('Padlet', '')?.trim() || '',
-          desc: item.description?.replace(/<[^>]*>?/gm, '')?.trim() || '',
-          author: item.author?.trim() || '匿名',
-          img: item.enclosure?.link || item.thumbnail || ''
-        }));
-      },
-      // 通道 2: AllOrigins 代理
-      async () => {
-        const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(PADLET_RSS)}`);
-        const data = await res.json();
-        return parseXmlText(data.contents);
-      },
-      // 通道 3: CorsProxy 代理
-      async () => {
-        const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(PADLET_RSS)}`);
-        const text = await res.text();
-        return parseXmlText(text);
-      }
-    ];
-
-    function parseXmlText(xmlText) {
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(xmlText, "text/xml");
-      const items = xml.querySelectorAll("item");
-      const list = [];
-      items.forEach(item => {
-        const title = item.querySelector("title")?.textContent?.replace('Padlet', '')?.trim() || "";
-        const desc = item.querySelector("description")?.textContent?.trim() || "";
-        const author = item.querySelector("author")?.textContent?.trim() || "匿名";
-        let imgUrl = item.querySelector("enclosure")?.getAttribute("url") || "";
-        if (title || desc || imgUrl) list.push({ title, desc, author, img: imgUrl });
-      });
-      return list;
-    }
-
     let liveCardPool = [];
     const container = document.getElementById('wall-container');
     const statusEl = document.getElementById('status');
 
     async function fetchLivePadletData() {
-      for (let i = 0; i < SOURCES.length; i++) {
-        try {
-          const cards = await SOURCES[i]();
-          if (cards && cards.length > 0) {
-            liveCardPool = cards;
-            statusEl.innerText = `实时连线中 (${liveCardPool.length} 条祝福)`;
-            renderWall();
-            return;
+      try {
+        // 请求本地 Vercel 后端 API
+        const res = await fetch('/api/feed');
+        if (!res.ok) throw new Error("API 请求失败");
+
+        const xmlText = await res.text();
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(xmlText, "text/xml");
+        const items = xml.querySelectorAll("item");
+
+        const list = [];
+        items.forEach(item => {
+          const title = item.querySelector("title")?.textContent?.replace('Padlet', '')?.trim() || "";
+          const desc = item.querySelector("description")?.textContent?.trim() || "";
+          const author = item.querySelector("author")?.textContent?.trim() || "匿名";
+          
+          let imgUrl = item.querySelector("enclosure")?.getAttribute("url") || "";
+          if (!imgUrl) {
+            const mediaContent = item.getElementsByTagName("media:content")[0];
+            if (mediaContent) imgUrl = mediaContent.getAttribute("url") || "";
           }
-        } catch (e) {
-          console.warn(`通道 ${i + 1} 尝试失败，切换备用通道...`);
+
+          if (title || desc || imgUrl) {
+            list.push({ title, desc, author, img: imgUrl });
+          }
+        });
+
+        if (list.length > 0) {
+          liveCardPool = list;
+          statusEl.innerText = `实时同步中 (${liveCardPool.length} 条祝福)`;
+          renderWall();
         }
+      } catch (e) {
+        console.error(e);
+        statusEl.innerText = "数据拉取异常，重试中...";
       }
-      statusEl.innerText = "正在尝试重连...";
     }
 
     function renderWall() {
@@ -156,7 +134,7 @@
       });
     }
 
-    // 平滑独立 Shuffle 翻牌
+    // 独立 Shuffle 洗牌
     function startShuffle() {
       setInterval(() => {
         if (liveCardPool.length < 2) return;
@@ -187,6 +165,7 @@
     async function init() {
       await fetchLivePadletData();
       startShuffle();
+      // 每 10 秒拉取一次新提交的祝福
       setInterval(fetchLivePadletData, 10000);
     }
 
